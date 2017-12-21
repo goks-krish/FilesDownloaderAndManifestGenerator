@@ -332,7 +332,7 @@ public class EmcDownloadTool {
 						
 					
 					Element drugName = doc.createElement("drug");
-					drugName.setAttribute("title", drugTitle);
+					drugName.setAttribute("title", drugTitle.trim());
 					drugName.setAttribute("id", file.split(".xml")[0]);
 					
 					if(!lastCompanyName.equalsIgnoreCase(title)) {
@@ -405,7 +405,9 @@ public class EmcDownloadTool {
 			Document doc = dBuilder.parse(stream);
 			String title = doc.getElementsByTagName("TITLE").item(0).getTextContent();
 			if(title != null && title.trim().length()!=0) {
-				titleAndId.put(title.trim()+";"+fXmlFile.getName(), fXmlFile.getName());
+				title = title.trim();
+				title = title.substring(0, 1).toUpperCase() + title.substring(1);
+				titleAndId.put(title + ";" + fXmlFile.getName(), fXmlFile.getName());
 			}
 			
 			NodeList nodeList = doc.getElementsByTagName("ORIGINAL");
@@ -416,7 +418,9 @@ public class EmcDownloadTool {
 					text = nodeList.item(0).getChildNodes().item(4).getTextContent();
 				}
 				if(text != null && text.trim().length()!=0) {
-					companyAndId.put(text.trim()+";"+fXmlFile.getName(), doc.getElementsByTagName("TITLE").item(0).getTextContent());
+					text = text.trim();
+					text = text.substring(0, 1).toUpperCase() + text.substring(1);
+					companyAndId.put(text + ";"+fXmlFile.getName(), doc.getElementsByTagName("TITLE").item(0).getTextContent());
 				}
 			}
 			
