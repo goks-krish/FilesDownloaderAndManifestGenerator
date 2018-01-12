@@ -1,11 +1,11 @@
 package net.medhand.emc;
 
-import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -14,11 +14,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
+import java.time.LocalDate;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.SortedMap;
 import java.util.TreeMap;
 
 import com.google.gson.Gson;
@@ -30,11 +28,9 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 import java.util.logging.FileHandler;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 
-import javax.imageio.ImageIO;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.OutputKeys;
@@ -48,42 +44,107 @@ import org.w3c.dom.Document;
 public class EmcDownloadTool {
 	static String baseURL = "http://api.uat05.medicines.org.uk/v1/";
 	static String APIKEY = "17B9D964FDAA8145AC86A3AAD825F2CD";
-	static String dst = "xml/xml/";
-	static String imgDst = "xml/images/";
-	static String outputXmlFile ="xml/demc.xml";
-	static int offset = 1;
+	static String bookSrcPath = null;
+	static String xmlDst = null;
+	static String imgDst = null;
+	static String outputXmlFile = null;
+	static String fullRequestURL = null;
+	static int offset = 3301;
 	private static final Logger LOGGER = Logger.getLogger(EmcDownloadTool.class.getName());	
 	static FileHandler fh;  
+	static int newFilesCount = 0;
+	static int newImagesCount = 0;
+	static int deleteFilesCount = 0;
+	static int deleteImagesCount = 0;
+	static boolean fullMode = false;
 
 	static TreeMap<String, String> titleAndId = new TreeMap<String , String>();
 	static TreeMap<String, String> companyAndId = new TreeMap<String , String>();
+	static TreeMap<String,String> companyList = new TreeMap<String, String>(); 
+	static TreeMap<String,String> companyAndMedicinesList = new TreeMap<String, String>();
 
 	public static void main(String[] args) {
 		try {
 			DateFormat df = new SimpleDateFormat("ddMMyyyy_HHmmss");
 			String reportDate = df.format(new Date());
+			
+			if(!new File("log").isDirectory()) {
+				new File("log").mkdir();
+			}
+			
 			fh = new FileHandler("log/"+reportDate+".log"); 
 			LOGGER.addHandler(fh);
 	        SimpleFormatter formatter = new SimpleFormatter();  
 	        fh.setFormatter(formatter);  
 			
 			LOGGER.info("Started: "+new Date());
+
+			if(args.length==0) {
+				System.out.println("Run with Book location Parameter. \n e.g: EmcDownloadTool c:/medhand/emc/");
+				System.exit(0);
+			}
+			bookSrcPath = args[0];
 			
-			String fullRequestURL = baseURL + "documents?state=authorised&offset="+offset;
+			if(!(bookSrcPath.endsWith("/") || bookSrcPath.endsWith("\\"))) {
+				bookSrcPath = bookSrcPath + "/";
+			}
+			xmlDst = bookSrcPath + "xml/xml/";
+			imgDst = bookSrcPath + "xml/images/";
+			outputXmlFile = bookSrcPath + "xml/demc.xml";
+			String pullDate = null;
+			String date = new SimpleDateFormat("YYYY-MM-DD").format(new Date());
+			
+			if(new File(outputXmlFile).isFile()) {
+				FileInputStream stream = new FileInputStream(outputXmlFile);
+				DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+				DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
+				Document doc = dBuilder.parse(stream);
+				Node rootNode = doc.getDocumentElement();
+				pullDate = rootNode.getAttributes().getNamedItem("pullDate").getNodeValue();
+			}
+			
+			//Read Map Data from File
+			companyList = readFileToMap(bookSrcPath + "xml/companies.txt");
+			companyAndMedicinesList = readFileToMap(bookSrcPath + "xml/companies&medicines.txt");
 			
 			/*1. Call API to read metadata & export*/
-			System.out.println("\n\n\t\t### 1. Download XML");
-			getMetatData(fullRequestURL);
+			LOGGER.info("\n\n\t\t### 1. Download XML");
+			if(pullDate == null) {
+				fullRequestURL = baseURL + "documents?state=authorised&offset=";
+				LOGGER.info("Initializing Full download since last pull date is not available");
+				fullMode = true;
+				getMetatData();
+			} else {
+				LOGGER.info("Pulling only updates since the last pull date is :"+pullDate);
+				
+				LocalDate today = LocalDate.now();
+				LocalDate lastPull = LocalDate.parse(pullDate);
+				int diffDays = lastPull.until(today).getDays();
+				//Get Retired
+				fullRequestURL = baseURL + "documents?state=retired&daysoffset="+ diffDays +"&lastmodifieddateto=" + date + "&offset=";
+				getMetatData();
+				//Get New & Updated
+				fullRequestURL = baseURL + "documents?state=authorised&daysoffset="+ diffDays +"&lastmodifieddateto=" + date + "&offset=";
+				getMetatData();
+				
+			}
+			// Update Companies to File
+			writeMapToFile(bookSrcPath + "xml/companies.txt",companyList);
+			writeMapToFile(bookSrcPath + "xml/companies&medicines.txt",companyAndMedicinesList);
 			
-			/*2. Downlaod Images from the xml files downloaded above*/
-			System.out.println("\n\n\t\t### 2. Download Images");
-			downloadImages(new File("xml/xml"));
+			/*2. Download Images from the xml files downloaded above*/
+			LOGGER.info("\n\n\t\t### 2. Download Images");
+			downloadImages(new File(xmlDst));
 			
-			/*3. Create Manifest & Download Images*/
-			System.out.println("\n\n\t\t### 3. Generate Manifest");
-			generateManifest(new File("xml/xml"));
+			/*3. Create Manifest*/
+			LOGGER.info("\n\n\t\t### 3. Generate Manifest");
+			generateManifest(new File(xmlDst));
 			
 			
+			LOGGER.info("\n New Files Downloaded: " + newFilesCount);
+			LOGGER.info("\n New Images Downloaded: " + newImagesCount);
+			LOGGER.info("\n Old Files Deleted: " + deleteFilesCount);
+			LOGGER.info("\n Old Images Deleted: " + deleteImagesCount);
 			LOGGER.info("\n\n****Completed: "+new Date());
 		}
 		catch(Exception e) {
@@ -92,17 +153,19 @@ public class EmcDownloadTool {
 		
 	}
 	
-	public static void getMetatData(String requestURL) {
+	public static void getMetatData() {
 		try {
-
-			URL url = new URL(requestURL);
+			if(!new File(xmlDst).isDirectory()) {
+				new File(xmlDst).mkdir();
+			}
+			URL url = new URL(fullRequestURL+offset);
 			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 			conn.setRequestMethod("GET");
 			conn.setRequestProperty("Accept", "application/json");
 			conn.setRequestProperty("ApiKey", APIKEY);
 
 			if (conn.getResponseCode() != 200) {
-				LOGGER.warning(requestURL + " not reachable. -"+conn.getResponseCode());
+				LOGGER.warning(fullRequestURL + offset + " not reachable. -"+conn.getResponseCode());
 				throw new RuntimeException("Failed : HTTP error code : "
 						+ conn.getResponseCode());
 			}
@@ -114,40 +177,51 @@ public class EmcDownloadTool {
 			String responseJson="";
 
 			while ((output = br.readLine()) != null) {
-				responseJson = responseJson + output;
+				responseJson = responseJson +"\n" + output;
 			}
 			
 			Gson gson = new Gson();
 			Metadata metadata = gson.fromJson(responseJson, Metadata.class);
 			
-			for(Resource resource:metadata.getResource()) {
-				getPage(resource.getId()+"");
+			if(metadata.getTotalRecords()>0) {
+				for(Resource resource:metadata.getResource()) {
+					if(resource.getState().equalsIgnoreCase("Authorised")){
+						getPage(resource.getId()+"");
+						companyList.put(resource.getCompany().getId()+"", resource.getCompany().getName());
+						companyAndMedicinesList.put(resource.getId()+"", resource.getCompany().getId()+"");
+					} else if(resource.getState().equalsIgnoreCase("Retired")) {
+						deletePage(resource.getId()+"");
+					}
+				}
+				
+				offset = offset + metadata.getLimit();
+				
+				conn.disconnect();
+				br.close();
+				
+				if(metadata.getTotalRecords()>offset) {
+					getMetatData();
+				} else {
+					LOGGER.info("Limit: "+ metadata.getLimit());
+					LOGGER.info("Total Pages: " + metadata.getTotalPages());
+					LOGGER.info("Total Records: " + metadata.getTotalRecords());
+					LOGGER.info("OffSet: " + metadata.getOffset());
+					LOGGER.info("Total Resources: " + metadata.getResource().size());
+				}
 			}
-			
-			offset = offset + metadata.getLimit();
-			
-			conn.disconnect();
-			br.close();
-			
-			if(metadata.getTotalRecords()>offset) {
-				getMetatData(baseURL+"documents?state=authorised&offset="+offset);
-			} else {
-				System.out.println("Limit: "+ metadata.getLimit());
-				System.out.println("Total Pages: " + metadata.getTotalPages());
-				System.out.println("Total Records: " + metadata.getTotalRecords());
-				System.out.println("OffSet: " + metadata.getOffset());
-				System.out.println("Total Resources: " + metadata.getResource().size());
-			}
-			
 		}
 		catch (Exception e) {
-			LOGGER.warning(" Something went wrong - "+e.getMessage());
+			LOGGER.warning(fullRequestURL + offset +" Something went wrong - "+e.getMessage());
 			e.printStackTrace();
 		}
 		
 	}
 	
 	public static void downloadImages(File path) {
+		if(!new File(imgDst).isDirectory()) {
+			new File(imgDst).mkdir();
+		}
+		
 		for(File file:path.listFiles()) {
 			try {
 				DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
@@ -179,30 +253,33 @@ public class EmcDownloadTool {
 			String imageFolder = imgURL.split("/")[0];
 			String imageName = imgURL.split("/")[1];
 			
+			String imgPath = imgDst+ imageFolder + "_" +imageName;
+			
 			//3 Construct http url
 			imgURL = imageFolder.split("_FILES")[0].toLowerCase().replace(".", "~")+"~"+imageName;
 			
-			
-			URL url = new URL(baseURL+"images/"+imgURL);
-			
-			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-			conn.setRequestMethod("GET");
-			conn.setRequestProperty("Accept", "image/gif");
-			conn.setRequestProperty("ApiKey", APIKEY);
-			
-			InputStream in = conn.getInputStream();
-		    FileOutputStream out = new FileOutputStream(imgDst+ imageFolder + "_" +imageName);
-		    
-		    int c;
-	        byte[] b = new byte[1024];
-	        while ((c = in.read(b)) != -1) {
-	            out.write(b, 0, c);
-	        }
-			
-	        in.close();
-	        out.flush();
-	        out.close();
-			conn.disconnect();
+			if(!new File(imgPath).exists()) {
+				URL url = new URL(baseURL+"images/"+imgURL);
+				
+				HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+				conn.setRequestMethod("GET");
+				conn.setRequestProperty("Accept", "image/gif");
+				conn.setRequestProperty("ApiKey", APIKEY);
+				
+				InputStream in = conn.getInputStream();
+			    FileOutputStream out = new FileOutputStream(imgPath);
+			    
+			    int c;
+		        byte[] b = new byte[1024];
+		        while ((c = in.read(b)) != -1) {
+		            out.write(b, 0, c);
+		        }
+		        newImagesCount++;
+		        in.close();
+		        out.flush();
+		        out.close();
+				conn.disconnect();
+			}
 		}
 		catch (Exception e) {
 			LOGGER.warning(" Something went wrong - "+e.getMessage() + "\n File: "+fileName);
@@ -213,43 +290,77 @@ public class EmcDownloadTool {
 	
 	public static void getPage(String ID) {
 		try {
-			String requestURL = baseURL + "spcs/"+ID+"?format=xml";
-			URL url = new URL(requestURL);
-			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-			conn.setRequestMethod("GET");
-			conn.setRequestProperty("Accept", "application/json");
-			conn.setRequestProperty("ApiKey", APIKEY);
-
-			if (conn.getResponseCode() != 200) {
-				throw new RuntimeException("Failed : HTTP error code : "
-						+ conn.getResponseCode());
-			}
-
-			BufferedReader br = new BufferedReader(new InputStreamReader(
-				(conn.getInputStream())));
-			BufferedWriter writer = new BufferedWriter(new FileWriter(new File(dst+ID+".xml")));
-			
-			String output="";
-			String responseJson="";
-
-			while ((output = br.readLine()) != null) {
-				responseJson = responseJson + output;
-			}
-			
-			Gson gson = new Gson();
-			SPC SPCData = gson.fromJson(responseJson, SPC.class);
-
-			writer.write(SPCData.getResource().getContent());
-
-			br.close();
-			writer.flush();
-			writer.close();
-			conn.disconnect();
+			if(!new File(xmlDst+ID+".xml").isFile() || !fullMode) {
+				String requestURL = baseURL + "spcs/"+ID+"?format=xml";
+				URL url = new URL(requestURL);
+				HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+				conn.setRequestMethod("GET");
+				conn.setRequestProperty("Accept", "application/json");
+				conn.setRequestProperty("ApiKey", APIKEY);
+	
+				if (conn.getResponseCode() != 200) {
+					throw new RuntimeException("Failed : HTTP error code : "
+							+ conn.getResponseCode());
+				}
+	
+				BufferedReader br = new BufferedReader(new InputStreamReader(
+					(conn.getInputStream())));
+				BufferedWriter writer = new BufferedWriter(new FileWriter(new File(xmlDst+ID+".xml")));
+				
+				String output="";
+				String responseJson="";
+	
+				while ((output = br.readLine()) != null) {
+					responseJson = responseJson + output;
+				}
+				
+				Gson gson = new Gson();
+				SPC SPCData = gson.fromJson(responseJson, SPC.class);
+	
+				writer.write(SPCData.getResource().getContent());
+				newFilesCount++;
+	
+				br.close();
+				writer.flush();
+				writer.close();
+				conn.disconnect();
+			}	
 		}
 		catch (Exception e) {
 			LOGGER.warning(" Something went wrong - "+e.getMessage());
 			e.printStackTrace();
 
+		}
+	}
+	
+	public static void deletePage(String ID) {
+		File tarXml = new File(xmlDst+ID+".xml");
+		if(tarXml.isFile()){
+			try {
+				DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+				dbFactory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+				DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
+				
+				FileInputStream stream = new FileInputStream(tarXml);
+				Document doc = dBuilder.parse(stream);
+				NodeList nodes = doc.getElementsByTagName("IMG");
+				int size = nodes.getLength();
+				for(int i=0;i<size;i++) {
+					Element ele = (Element) nodes.item(i);
+					String imagePath = imgDst+ele.getAttribute("SRC"); 
+					imagePath = imagePath.replace("./","");
+					imagePath = imagePath.replace("/","_");
+					File img = new File(imagePath);
+					if(img.isFile()) {
+						img.delete();
+						deleteImagesCount++;
+					}
+				}	
+				tarXml.delete();
+				deleteFilesCount++;
+			} catch (Exception e) {
+				LOGGER.warning(" Something went wrong in the file - " + tarXml.getAbsolutePath() + " \n "+e.getMessage());
+			}
 		}
 	}
 	
@@ -270,7 +381,7 @@ public class EmcDownloadTool {
 	        doc = docBuilder.newDocument();
 	        Element root = doc.createElement("manifest");
 	        root.setAttribute("title", "eMC Medicines Information Services");
-	        root.setAttribute("pullDate", new SimpleDateFormat("dd-MMM-yy").format(new Date()));
+	        root.setAttribute("pullDate", new SimpleDateFormat("YYYY-MM-DD").format(new Date()));
 	        doc.appendChild(root);
 	        
 	        Element medicines = doc.createElement("medicines");
@@ -317,6 +428,7 @@ public class EmcDownloadTool {
 	        Element company= null;
 	        //COMPANIES
 	        String lastCompanyName = "";
+	        TreeMap<String, String> drugList = new TreeMap<String , String>();
 	        for (Map.Entry<String, String> entry : companyAndId.entrySet()) {
 	        	try {
 					String title = entry.getKey().split(";")[0];
@@ -328,22 +440,23 @@ public class EmcDownloadTool {
 					if(!(ch>='a' && ch<='z') && !(ch>='A' && ch<='Z')) {
 						titleChar = "0-9";
 					}
-					
 						
-					
-					Element drugName = doc.createElement("drug");
-					drugName.setAttribute("title", drugTitle.trim());
-					drugName.setAttribute("id", file.split(".xml")[0]);
-					
 					if(!lastCompanyName.equalsIgnoreCase(title)) {
 						if(company!=null){
+							for (Map.Entry<String, String> drugEntry : drugList.entrySet()) {
+								Element drugName = doc.createElement("drug");
+								drugName.setAttribute("title", drugEntry.getKey());
+								drugName.setAttribute("id", drugEntry.getValue());
+								company.appendChild(drugName);
+								drugList = new TreeMap<String , String>();
+							}
 							alphaPart.appendChild(company);	
 						}
 						lastCompanyName = title;
 						company=doc.createElement("company");
 						company.setAttribute("title", title.trim());				
 					}
-					company.appendChild(drugName);
+					drugList.put(drugTitle.trim(), file.split(".xml")[0]);
 					
 					if(!partVar.equalsIgnoreCase(titleChar)) {
 						if(alphaPart!=null) {
@@ -358,6 +471,12 @@ public class EmcDownloadTool {
 	        	}
 	        }
 	        if(company!=null){
+	        	for (Map.Entry<String, String> drugEntry : drugList.entrySet()) {
+					Element drugName = doc.createElement("drug");
+					drugName.setAttribute("title", drugEntry.getKey());
+					drugName.setAttribute("id", drugEntry.getValue());
+					company.appendChild(drugName);
+				}
 				alphaPart.appendChild(company);	
 			}
 	        if(alphaPart!=null) { //last set
@@ -410,27 +529,18 @@ public class EmcDownloadTool {
 				titleAndId.put(title + ";" + fXmlFile.getName(), fXmlFile.getName());
 			}
 			
-			NodeList nodeList = doc.getElementsByTagName("ORIGINAL");
-			if(nodeList!=null) {
-				String text = nodeList.item(0).getChildNodes().item(3).getTextContent();
-				
-				if(text==null || text.trim().length()==0){
-					text = nodeList.item(0).getChildNodes().item(4).getTextContent();
-				}
-				if(text != null && text.trim().length()!=0) {
-					text = text.trim();
-					text = text.substring(0, 1).toUpperCase() + text.substring(1);
-					companyAndId.put(text + ";"+fXmlFile.getName(), doc.getElementsByTagName("TITLE").item(0).getTextContent());
-				}
-			}
+			String companyTitle = companyList.get(companyAndMedicinesList.get(fXmlFile.getName().split(".xml")[0]));
+			companyTitle = companyTitle.substring(0,1).toUpperCase() + companyTitle.substring(1); 
+			companyAndId.put(companyTitle + ";"+fXmlFile.getName(), doc.getElementsByTagName("TITLE").item(0).getTextContent().trim());
+			
 			
 		} catch (Exception e) {
 			LOGGER.warning(" Something went wrong in the file - " + fXmlFile.getAbsolutePath() + " \n "+e.getMessage());
+			e.printStackTrace();
 		}
 	}
 	
 	public static void writeFile(String file){
-		//System.out.println(file);
 		try {
 			BufferedWriter out = new BufferedWriter(new FileWriter(outputXmlFile));
 			out.write(file);
@@ -440,5 +550,38 @@ public class EmcDownloadTool {
 				LOGGER.severe(e.toString());
 				System.exit(-1);
 				}	
+	}
+	
+	public static void writeMapToFile(String file, TreeMap<String, String> mapData) {
+		try {
+			BufferedWriter out = new BufferedWriter(new FileWriter(file));
+			for(Map.Entry<String,String> m :mapData.entrySet()){
+				out.write(m.getKey()+"="+m.getValue()+"\n");
+			}
+			out.close();
+			} 
+		catch (Exception e) { 
+			e.printStackTrace(); 
+			LOGGER.severe(e.toString());
+		}
+	}
+	
+	public static TreeMap<String,String> readFileToMap(String file) {
+		TreeMap<String, String> mapData = new TreeMap<String, String>();
+		try {
+			if(new File(file).isFile()){
+				BufferedReader br = new BufferedReader(new FileReader(file));
+				String output="";
+				while ((output = br.readLine()) != null) {
+					mapData.put(output.split("=")[0], output.split("=")[1]);
+				}
+				br.close();
+			}
+		} 
+		catch (Exception e) { 
+			e.printStackTrace(); 
+			LOGGER.severe(e.toString());
+		}
+		return mapData;
 	}
 }
