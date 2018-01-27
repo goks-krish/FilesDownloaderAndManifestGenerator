@@ -12,9 +12,14 @@ import java.io.InputStreamReader;
 import java.io.StringWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.Map;
 import java.util.TreeMap;
@@ -231,11 +236,21 @@ public class EmcDownloadTool {
 				FileInputStream stream = new FileInputStream(file);
 				Document doc = dBuilder.parse(stream);
 				NodeList nodes = doc.getElementsByTagName("IMG");
+				ArrayList<String> imgNames = new ArrayList<String>();
 				int size = nodes.getLength();
 				for(int i=0;i<size;i++) {
 					Element ele = (Element) nodes.item(i);
+					if(imgNames.contains(ele.getAttribute("SRC"))) {
+						LOGGER.warning("Move Error XML File: "+file.getName());
+						Path filePath = Paths.get(file.getAbsolutePath());
+						Path targetPath = Paths.get(bookSrcPath+"../error/"+file.getName());
+						//Files.move(filePath,targetPath , StandardCopyOption.REPLACE_EXISTING);
+						break;
+					}
+					imgNames.add(ele.getAttribute("SRC"));
 					getImage(ele.getAttribute("SRC"),file.getName());
 				}
+				
 				
 			} catch (Exception e) {
 				LOGGER.warning(" Something went wrong in the file - " + file.getAbsolutePath() + " \n "+e.getMessage());
